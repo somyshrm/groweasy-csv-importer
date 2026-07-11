@@ -109,6 +109,41 @@ async function callOpenAI(rows: Record<string, string>[]): Promise<string> {
   return data.choices?.[0]?.message?.content || "";
 }
 
+async function callGemini(rows: Record<string, string>[]): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
+  const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        contents: [
+          { role: "user", parts: [{ text: buildUserPrompt(rows) }] },
+        ],
+        generationConfig: {
+          temperature: 0,
+          responseMimeType: "application/json",
+        },
+      }),
+    }
+  );
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Gemini API error (${res.status}): ${errText}`);
+  }
+  const data = await res.json();
+  const text =
+    data.candidates?.[0]?.content?.parts
+      ?.map((p: { text?: string }) => p.text || "")
+      .join("") || "";
+  return text;
+}
+
 /**
  * Calls the configured LLM provider for a single batch of raw CSV rows and
  * returns the parsed array of mapped objects (may include "_skip" markers).
@@ -122,7 +157,11 @@ export async function extractBatch(
 
   try {
     const raw =
-      provider === "openai" ? await callOpenAI(rows) : await callAnthropic(rows);
+      provider === "openai"
+        ? await callOpenAI(rows)
+        : provider === "gemini"
+        ? await callGemini(rows)
+        : await callAnthropic(rows);
     const cleaned = stripCodeFences(raw);
     const parsed = JSON.parse(cleaned);
     if (!Array.isArray(parsed)) {
